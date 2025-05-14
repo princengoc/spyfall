@@ -21,7 +21,11 @@ At any turn, any player can trigger a game-ending move.
 For a first implementation, we make some simplifying assumptions. These can be relaxed to add more human-like dynamics later.  
 
 1. **Direct communication with no errors.** Players communicate over $\Delta_n$ directly, and if a player intends to send out $C_t$, then everyone else receives $C_t$ and not a noise-corrupted version of it. In reality, people communicate with words that describe the location, which then adds two things: (i) a translation (NLP) to (probability) layer, and (ii) an encode/decode layer, which potentially makes the received message different from the sent message. 
-2. **Automatic end-game trigger.** Game ends after $5n$ rounds (each person share their info 5 times) and people do MLE votes, ie, vote for the most-likely candidate (spy or location) based on their private beliefs.   
+2. **Automatic end-game trigger.** Game ends when either:
+  - spy is very confident (> 90%) of the location, OR
+  - everybody's except the spy top suspect is the same person (which could be wrong)
+
+Then a vote is triggered, and players vote for the most-likely candidate (spy or location) based on their private beliefs.   
 
 
 ## State variables
@@ -196,10 +200,9 @@ $$
   =\sum_{i=1}^m q_i\log\frac{q_i}{p_i}\;\ge0.
 $$
 
-* **Turn-wise gain** for player $i$ on locations:
+* **Turn-wise gain**: public information gain at step $t$ (thanks to player $i_t$ sharing information at that step): 
   $\mathrm{IG}\bigl(P_{i,t-1},\,P_{i,t}\bigr).$
-* **Aggregate gain** from all of $j$’s messages up to $T$:
-  $\mathrm{IG}\bigl(P_{i,0},\,P_{i,T}\bigr).$
+* **Aggregate gain of player $i$**: need to compute public information WITHOUT person $i$'s messages, and then compute the information gain of those two distributions. Compute this with running Bayesian updates.  
 
 
 # Code up the game with Pyro: TODOs
@@ -216,4 +219,15 @@ Our goal is to write codes to
 * Collect statistics to try out different strategies against each other and fine-tune parameters
 * Write robust codes so that our agents (bot players) can be used as baselines for benchmarks like RL agents in a Gym environment. 
 
+---- 
 
+# Code details
+
+```
+source ../shared-uv-venv/bin/activate
+```
+
+Packages
+* `pyro-ppl`
+* `matplotlib`
+* `seaborn`
