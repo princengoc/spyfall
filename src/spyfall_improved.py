@@ -44,24 +44,27 @@ class Player:
         
         # Initialize spy belief (everyone starts with uniform)
         self.spy_belief = np.ones(num_players) / num_players
-        
-        # Players know they aren't the spy
-        if not is_spy:
-            self.spy_belief[player_id] = 0.0
-            self.spy_belief = self.spy_belief / np.sum(self.spy_belief)
+        # everyone claims that they are NOT the spy, including the spy themselves
+        self.spy_belief[player_id] = 0.0
+        self.spy_belief = self.spy_belief / np.sum(self.spy_belief)
         
         # Game history
         self.game_history = []
     
-    def update_beliefs(self, speaker_id: int, claim: np.ndarray, 
+    def update_beliefs(self, speaker_id: int, claim: np.ndarray, accusation: np.ndarray,
                       public_location_belief: np.ndarray, 
                       public_spy_belief: np.ndarray):
-        """Update beliefs based on a new claim."""
+        """Update beliefs based on a new claim and accusation."""
         raise NotImplementedError("Subclasses must implement this method.")
     
     def generate_claim(self, public_location_belief: np.ndarray,
-                      public_spy_belief: np.ndarray) -> np.ndarray:
-        """Generate a claim based on the player's strategy."""
+                      public_spy_belief: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Generate a claim based on the player's strategy and provide accusation.
+        
+        Returns:
+            Tuple of (location_claim, spy_accusation)
+        """
         raise NotImplementedError("Subclasses must implement this method.")
 
 
@@ -74,10 +77,10 @@ class BayesianFlatHideRevealPlayer(Player):
         self.beta = beta  # Concentration parameter
         self.lambda_val = lambda_val  # Truthfulness parameter
     
-    def update_beliefs(self, speaker_id: int, claim: np.ndarray, 
+    def update_beliefs(self, speaker_id: int, claim: np.ndarray, accusation: np.ndarray,
                       public_location_belief: np.ndarray, 
                       public_spy_belief: np.ndarray):
-        """Update beliefs using Bayesian update."""
+        """Update beliefs using Bayesian update with both claim and accusation."""
         # Don't update our own beliefs based on our own claims
         if speaker_id == self.player_id:
             return
@@ -91,37 +94,36 @@ class BayesianFlatHideRevealPlayer(Player):
             self.location_belief = new_belief / np.sum(new_belief)
         
         # Everyone updates spy belief
-        # Clone public belief but ensure we know we're not the spy
-        new_spy_belief = np.copy(public_spy_belief)
+        # Trust accusation based on how much we trust the speaker
+        # If speaker's spy probability is high, trust less
+        speaker_trustworthiness = 1.0 - self.spy_belief[speaker_id]
+        trust_factor = 0.5 * speaker_trustworthiness  # Scale trust by suspicion
         
-        if not self.is_spy:
-            # Non-spy knows they're not the spy
-            new_spy_belief[self.player_id] = 0.0
-            if np.sum(new_spy_belief) > 0:
-                new_spy_belief = new_spy_belief / np.sum(new_spy_belief)
+        # Blend our current spy belief with the accusation
+        new_spy_belief = (1 - trust_factor) * self.spy_belief + trust_factor * accusation
         
-        self.spy_belief = new_spy_belief
+        # everybody claims that they are NOT the spy, even the spy themselves
+        new_spy_belief[self.player_id] = 0.0
+
+        # normalizes
+        self.spy_belief = new_spy_belief / np.sum(new_spy_belief)
         
-        # Try/except to avoid any issues with game_history
-        try:
-            # Add to history
-            self.game_history.append((speaker_id, claim))
-        except AttributeError:
-            # Initialize game_history if it doesn't exist
-            self.game_history = [(speaker_id, claim)]
+        # Add to history (now includes accusation)
+        self.game_history.append((speaker_id, claim, accusation))
     
     def generate_claim(self, public_location_belief: np.ndarray,
-                      public_spy_belief: np.ndarray) -> np.ndarray:
-        """Generate a claim using Flat Hide-Reveal strategy."""
-        # γ = β((1-λ)1 + λP)
+                      public_spy_belief: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Generate a claim using Flat Hide-Reveal strategy and return accusation."""
+        # γ = β((1-λ)1 + λP) - This remains the same
         gamma = self.beta * ((1 - self.lambda_val) * np.ones(self.num_locations) + 
                             self.lambda_val * self.location_belief)
         
-        # Draw from Dirichlet distribution
+        # Draw from Dirichlet distribution for location claim
         gamma_tensor = torch.tensor(gamma, dtype=torch.float32) + 1e-6 # make all entries > 0
         claim = dist.Dirichlet(gamma_tensor).sample().numpy()
         
-        return claim
+        # Simply return the player's current spy belief as the accusation
+        return claim, self.spy_belief
 
 
 # Bayesian Player using Dynamic Hide-Reveal strategy
@@ -133,40 +135,43 @@ class BayesianDynamicHideRevealPlayer(Player):
         self.beta = initial_beta  # Initial concentration parameter
         self.lambda_val = initial_lambda  # Initial truthfulness parameter
     
-    def update_beliefs(self, speaker_id: int, claim: np.ndarray, 
+    def update_beliefs(self, speaker_id: int, claim: np.ndarray, accusation: np.ndarray,
                       public_location_belief: np.ndarray, 
                       public_spy_belief: np.ndarray):
-        """Update beliefs using Bayesian update."""
+        """Update beliefs using Bayesian update with both claim and accusation."""
         # Don't update our own beliefs based on our own claims
         if speaker_id == self.player_id:
             return
         
         if self.is_spy:
             # Spy updates location belief
-            # P(N=l|G_t) ∝ P(C_t|N=l,j_t) P(N=l|G_{t-1})
-            
             # Simple implementation: update proportionally to the claim
             new_belief = self.location_belief * (claim + 0.2)  # Adding noise to prevent convergence too fast
             self.location_belief = new_belief / np.sum(new_belief)
         
-        # Everyone updates spy belief
-        # Clone public belief but ensure we know we're not the spy
-        new_spy_belief = np.copy(public_spy_belief)
+        # Everyone updates spy belief based on direct accusation
+        # Trust accusation based on how much we trust the speaker
+        speaker_trustworthiness = 1.0 - self.spy_belief[speaker_id]
+        trust_factor = 0.5 * speaker_trustworthiness  # Scale trust by suspicion
+        
+        # Blend our current spy belief with the accusation
+        new_spy_belief = (1 - trust_factor) * self.spy_belief + trust_factor * accusation
         
         if not self.is_spy:
             # Non-spy knows they're not the spy
             new_spy_belief[self.player_id] = 0.0
-            if np.sum(new_spy_belief) > 0:
-                new_spy_belief = new_spy_belief / np.sum(new_spy_belief)
+        
+        if np.sum(new_spy_belief) > 0:
+            new_spy_belief = new_spy_belief / np.sum(new_spy_belief)
         
         self.spy_belief = new_spy_belief
         
-        # Add to history
-        self.game_history.append((speaker_id, claim))
+        # Add to history (now includes accusation)
+        self.game_history.append((speaker_id, claim, accusation))
     
     def generate_claim(self, public_location_belief: np.ndarray,
-                      public_spy_belief: np.ndarray) -> np.ndarray:
-        """Generate a claim using Dynamic Hide-Reveal strategy."""
+                      public_spy_belief: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Generate a claim using Dynamic Hide-Reveal strategy and return accusation."""
         # Update λ based on public spy belief
         # If player is top suspect, increase λ to be more truthful
         if np.argmax(public_spy_belief) == self.player_id:
@@ -186,11 +191,12 @@ class BayesianDynamicHideRevealPlayer(Player):
         gamma = self.beta * ((1 - self.lambda_val) * np.ones(self.num_locations) + 
                             self.lambda_val * self.location_belief)
         
-        # Draw from Dirichlet distribution
+        # Draw from Dirichlet distribution for location claim
         gamma_tensor = torch.tensor(gamma, dtype=torch.float32) + 1e-6 # make all entries > 0
         claim = dist.Dirichlet(gamma_tensor).sample().numpy()
         
-        return claim
+        # Return the player's current spy belief as accusation
+        return claim, self.spy_belief
 
 
 # Game class
@@ -231,7 +237,7 @@ class SpyfallGameImproved:
         # Game state variables
         self.true_location = None  # N
         self.spy = None  # S
-        self.game_state = []  # G_t: history of (j_t, C_t)
+        self.game_state = []  # G_t: history of (j_t, C_t, A_t)
         self.current_turn = 0
         
         # Player objects
@@ -311,19 +317,20 @@ class SpyfallGameImproved:
             "turn_gains": [], 
             "aggregate_gains": [], 
             "location_gain_contribution": [],
-            "spy_gain_contribution": []
+            "spy_gain_contribution": [],
+            "accusation_accuracy": []  # New statistic
         } for i in range(self.s)}
     
-    def update_public_beliefs(self, speaker_id: int, claim: np.ndarray):
+    def update_public_beliefs(self, speaker_id: int, claim: np.ndarray, accusation: np.ndarray):
         """
-        Update public beliefs based on a player's claim.
-        Also updates marginal public beliefs (excluding each player).
+        Update public beliefs based on a player's claim and accusation.
         
         Args:
             speaker_id: Player who made the claim
-            claim: The probability distribution claim
+            claim: The probability distribution claim over locations
+            accusation: The probability distribution over players being the spy
         """
-        # ----- Update main public beliefs -----
+        # ----- Update location public beliefs -----
         # For each location l, compute P(C_t|N=l,j_t)
         loc_likelihoods = np.zeros(self.n)
         for loc in range(self.n):
@@ -352,26 +359,35 @@ class SpyfallGameImproved:
         new_loc_belief = self.public_location_belief * loc_likelihoods
         self.public_location_belief = new_loc_belief / np.sum(new_loc_belief)
         
-        # For each potential spy k, compute P(C_t|S=k,j_t)
-        spy_likelihoods = np.zeros(self.s)
-        for potential_spy in range(self.s):
-            if potential_spy == speaker_id:
-                # If this player is the potential spy
-                # Spy claims are less correlated with the true location
-                spy_likelihoods[potential_spy] = 1.0  # Simplistic model
-            else:
-                # If this player is not the potential spy
-                # Expect claims to be more informative about the location
-                correlation = np.sum(claim * self.public_location_belief)
-                spy_likelihoods[potential_spy] = correlation
+        # ----- Update spy public beliefs -----
+        # Improved spy belief update logic
         
-        # Normalize likelihoods
-        spy_likelihoods = spy_likelihoods + 1e-10
-        spy_likelihoods = spy_likelihoods / np.sum(spy_likelihoods)
+        # 1. Behavioral analysis: How suspicious is this claim?
+        spy_likelihoods = np.ones(self.s)  # Default neutral for non-speakers
         
-        # Bayes update for spy belief
-        new_spy_belief = self.public_spy_belief * spy_likelihoods
-        self.public_spy_belief = new_spy_belief / np.sum(new_spy_belief)
+        # Calculate how much speaker's claim diverges from public expectation
+        divergence = kl_divergence(self.public_location_belief, claim)
+        
+        # Convert divergence to suspiciousness score
+        suspiciousness = 1.0 / (1.0 + np.exp(-divergence + 2.0))  # Offset for better scaling
+        
+        # Only update suspicion for the current speaker
+        spy_likelihoods[speaker_id] = suspiciousness
+        
+        # Bayes update based on behavior
+        behavior_belief = self.public_spy_belief * spy_likelihoods
+        if np.sum(behavior_belief) > 0:
+            behavior_belief = behavior_belief / np.sum(behavior_belief)
+        
+        # 2. Incorporate direct accusation
+        accusation_weight = 0.3  # How much to weigh the accusation vs behavioral analysis
+        
+        # Combine behavior-based belief with direct accusation
+        combined_belief = (1 - accusation_weight) * behavior_belief + accusation_weight * accusation
+        
+        # Normalize final belief
+        if np.sum(combined_belief) > 0:
+            self.public_spy_belief = combined_belief / np.sum(combined_belief)
         
         # ----- Update marginal public beliefs -----
         # Update marginal beliefs for each player
@@ -384,14 +400,23 @@ class SpyfallGameImproved:
             new_loc_belief = self.marginal_location_beliefs[excluded_player] * loc_likelihoods
             self.marginal_location_beliefs[excluded_player] = new_loc_belief / np.sum(new_loc_belief)
             
-            # Update marginal spy belief
-            new_spy_belief = self.marginal_spy_beliefs[excluded_player] * spy_likelihoods
-            self.marginal_spy_beliefs[excluded_player] = new_spy_belief / np.sum(new_spy_belief)
+            # Update marginal spy belief - similar logic as above but for marginal beliefs
+            marg_spy_likelihoods = np.ones(self.s)
+            marg_spy_likelihoods[speaker_id] = suspiciousness
+            
+            marg_behavior_belief = self.marginal_spy_beliefs[excluded_player] * marg_spy_likelihoods
+            if np.sum(marg_behavior_belief) > 0:
+                marg_behavior_belief = marg_behavior_belief / np.sum(marg_behavior_belief)
+            
+            marg_combined_belief = (1 - accusation_weight) * marg_behavior_belief + accusation_weight * accusation
+            
+            if np.sum(marg_combined_belief) > 0:
+                self.marginal_spy_beliefs[excluded_player] = marg_combined_belief / np.sum(marg_combined_belief)
     
-    def play_turn(self) -> Tuple[int, np.ndarray]:
+    def play_turn(self) -> Tuple[int, np.ndarray, np.ndarray]:
         """Play a single turn of the game."""
         if self.game_over:
-            return -1, None
+            return -1, None, None
         
         # Save the previous beliefs for information gain calculation
         prev_public_location_belief = self.public_location_belief.copy()
@@ -402,17 +427,17 @@ class SpyfallGameImproved:
         # Select current player (round-robin)
         player_idx = self.current_turn % self.s
         
-        # Generate claim from player
-        claim = self.players[player_idx].generate_claim(
+        # Generate claim and accusation from player
+        claim, accusation = self.players[player_idx].generate_claim(
             self.public_location_belief, 
             self.public_spy_belief
         )
         
         # Update game state
-        self.game_state.append((player_idx, claim))
+        self.game_state.append((player_idx, claim, accusation))
         
         # Update public beliefs
-        self.update_public_beliefs(player_idx, claim)
+        self.update_public_beliefs(player_idx, claim, accusation)
         
         # Update all players' private beliefs
         for i, player in enumerate(self.players):
@@ -420,13 +445,16 @@ class SpyfallGameImproved:
                 player.update_beliefs(
                     player_idx, 
                     claim, 
+                    accusation,
                     self.public_location_belief, 
                     self.public_spy_belief
                 )
         
-        # Collect turn statistics including marginal gains
+        # Collect turn statistics including accusation metrics
         self.collect_turn_statistics(
             player_idx, 
+            claim,
+            accusation,
             prev_public_location_belief, 
             prev_public_spy_belief,
             prev_marginal_location_beliefs,
@@ -439,26 +467,27 @@ class SpyfallGameImproved:
         # Check for end-game condition
         self.check_end_game()
         
-        return player_idx, claim
+        return player_idx, claim, accusation
     
     def check_end_game(self) -> bool:
         """
         Check if any player has reached end-game condition.
         """
-
         max_turns_reached = self.current_turn >= self.max_turns
-        # spy is confident about the location
-        spy_found_location = np.max(self.players[self.spy].location_belief) > 0.9
-        # critical mass is reached: everybody votes the same guy maybe except for one
+        
+        # Spy is confident about the location
+        spy_found_location = np.max(self.players[self.spy].location_belief) > 0.7
+        
+        # critical mass is reached: everybody's top suspect is the same guy except for one
         # assume that the spy would never vote for themselves, this is the same as polling everyone else's votes
         guesses = [np.argmax(p.spy_belief) for idx, p in enumerate(self.players) if idx != self.spy]
         voted_spy, vote_count = Counter(guesses).most_common(1)[0]
         all_same_vote = vote_count == len(self.players) - 1
+        
 
-        if max_turns_reached or spy_found_location or all_same_vote:                        
+        if max_turns_reached or spy_found_location or all_same_vote:   
             # Spy guesses the location
             spy_guess = np.argmax(self.players[self.spy].location_belief)
-            
             if voted_spy == self.spy: 
                 if spy_guess == self.true_location:
                     self.winner = "tie"
@@ -472,16 +501,18 @@ class SpyfallGameImproved:
         
         return False
     
-    def collect_turn_statistics(self, player_idx: int, 
+    def collect_turn_statistics(self, player_idx: int, claim: np.ndarray, accusation: np.ndarray,
                              prev_public_location_belief: np.ndarray,
                              prev_public_spy_belief: np.ndarray,
                              prev_marginal_location_beliefs: List[np.ndarray],
                              prev_marginal_spy_beliefs: List[np.ndarray]):
         """
-        Collect statistics for this turn, including marginal information gains.
+        Collect statistics for this turn, including accusation metrics.
         
         Args:
             player_idx: The index of the player who made the claim
+            claim: The location claim made
+            accusation: The spy accusation made
             prev_public_location_belief: Public location belief before the claim
             prev_public_spy_belief: Public spy belief before the claim
             prev_marginal_location_beliefs: Marginal location beliefs before the claim
@@ -498,6 +529,11 @@ class SpyfallGameImproved:
             prev_public_spy_belief,
             self.public_spy_belief
         )
+        
+        # Calculate accusation accuracy (how close to 1.0 at true spy position)
+        # Higher is better - perfect accusation would be 1.0 at spy position
+        accusation_accuracy = accusation[self.spy]
+        self.player_statistics[player_idx]["accusation_accuracy"].append(accusation_accuracy)
         
         # Calculate contribution of each player to the public belief
         for i in range(self.s):
@@ -528,6 +564,8 @@ class SpyfallGameImproved:
             "location_gain": location_gain,
             "spy_gain": spy_gain,
             "total_gain": total_gain,
+            "accusation_accuracy": accusation_accuracy,
+            "accusation_entropy": -np.sum(accusation * np.log(accusation + 1e-10)),
             "player_contributions": {
                 i: self.player_statistics[i]["aggregate_gains"][-1] for i in range(self.s)
             }
@@ -539,6 +577,7 @@ class SpyfallGameImproved:
         """
         Calculate aggregate information gain for each player.
         This compares public beliefs with vs. without each player's contributions.
+        Updated to include accusation data.
         """
         # For each player, recalculate public beliefs excluding their claims
         for player_idx in range(self.s):
@@ -546,8 +585,8 @@ class SpyfallGameImproved:
             location_belief_without_player = np.ones(self.n) / self.n
             spy_belief_without_player = np.ones(self.s) / self.s
             
-            # Replay the game without this player's claims
-            for t, (j, c) in enumerate(self.game_state):
+            # Replay the game without this player's claims and accusations
+            for t, (j, c, a) in enumerate(self.game_state):
                 if j != player_idx:  # Skip this player's claims
                     # Basic public belief update (simplified)
                     if j != self.spy:  # If speaker is not spy
@@ -556,11 +595,10 @@ class SpyfallGameImproved:
                         if np.sum(location_belief_without_player) > 0:
                             location_belief_without_player = location_belief_without_player / np.sum(location_belief_without_player)
                     
-                    # Simple spy belief update (simplified)
-                    if c[self.true_location] < 0.5:  # If claim is not concentrated on true location
-                        # Increase probability of being the spy
-                        spy_belief_without_player[j] += 0.1
-                        spy_belief_without_player = spy_belief_without_player / np.sum(spy_belief_without_player)
+                    # Update spy belief using accusation data
+                    accusation_weight = 0.3
+                    spy_belief_without_player = (1 - accusation_weight) * spy_belief_without_player + accusation_weight * a
+                    spy_belief_without_player = spy_belief_without_player / np.sum(spy_belief_without_player)
             
             # Calculate aggregate gain
             location_gain = self.calculate_information_gain(
@@ -596,7 +634,7 @@ class SpyfallGameImproved:
         gains = []
         player = self.players[player_idx]
         
-        for t, (j, c) in enumerate(self.game_history):
+        for t, (j, c, _) in enumerate(player.game_history):
             if j == player_idx:
                 # Compare player's belief before and after their claim
                 prev_belief = player.game_history[t-1][1] if t > 0 else np.ones(self.n) / self.n
@@ -628,19 +666,31 @@ class SpyfallGameImproved:
         
         # Plot spy beliefs
         ax = axs[1]
-        ax.set_title("Spy Beliefs")
+        ax.set_title("Spy Beliefs & Accusations")
         
-        # Plot spy vote counts
-        guesses = [np.argmax(p.spy_belief) for idx, p in enumerate(self.players) if idx != self.spy]
-        vote_counts = Counter(guesses)
-        guesses_relabeled = [vote_counts.get(i, 0) for i in range(self.s)]
-        ax.bar(range(self.s), guesses_relabeled, alpha=0.3, label="Player votes")
+        # Plot public spy belief
+        ax.bar(range(self.s), self.public_spy_belief, alpha=0.3, label="Public Spy Belief")
+        
+        # Plot individual player accusations
+        for i, player in enumerate(self.players):
+            if i != self.spy:  # Only show non-spy accusations
+                if len(self.game_state) > 0:
+                    # Find the most recent accusation by this player
+                    recent_accusation = None
+                    for j, _, a in reversed(self.game_state):
+                        if j == i:
+                            recent_accusation = a
+                            break
+                    
+                    if recent_accusation is not None:
+                        ax.plot(range(self.s), recent_accusation, 'o-', alpha=0.5, 
+                                label=f"Player {i} Accusation")
         
         # Mark true spy
         ax.axvline(x=self.spy, color='r', linestyle='--', label="True Spy")
         
         ax.set_xlabel("Player Number")
-        ax.set_ylabel("Vote counts")
+        ax.set_ylabel("Probability / Accusation Strength")
         ax.legend()
         
         plt.tight_layout()
@@ -656,7 +706,8 @@ class SpyfallGameImproved:
             "avg_turnwise_ig_by_player": np.zeros(self.s),
             "avg_aggregate_ig_by_player": np.zeros(self.s),
             "avg_loc_contribution_by_player": np.zeros(self.s),
-            "avg_spy_contribution_by_player": np.zeros(self.s)
+            "avg_spy_contribution_by_player": np.zeros(self.s),
+            "avg_accusation_accuracy": np.zeros(self.s)  # New statistic
         }
         
         for _ in tqdm(range(num_games), desc="Running games"):
@@ -687,6 +738,10 @@ class SpyfallGameImproved:
                 
                 if self.player_statistics[i]["spy_gain_contribution"]:
                     stats["avg_spy_contribution_by_player"][i] += self.player_statistics[i]["spy_gain_contribution"][-1]
+                
+                # Add accusation accuracy
+                if self.player_statistics[i]["accusation_accuracy"]:
+                    stats["avg_accusation_accuracy"][i] += np.mean(self.player_statistics[i]["accusation_accuracy"])
         
         # Calculate averages
         stats["spy_win_rate"] = stats["spy_wins"] / num_games
@@ -697,6 +752,7 @@ class SpyfallGameImproved:
         stats["avg_aggregate_ig_by_player"] /= num_games
         stats["avg_loc_contribution_by_player"] /= num_games
         stats["avg_spy_contribution_by_player"] /= num_games
+        stats["avg_accusation_accuracy"] /= num_games
         
         return stats
 
@@ -727,7 +783,8 @@ def run_strategy_comparison(num_players: int, num_locations: int, num_games: int
             "non_spy_win_rate": stats["non_spy_win_rate"],
             "tie_rate": stats["tie_rate"],
             "avg_turns": stats["avg_turns"],
-            "avg_ig_by_player": stats["avg_aggregate_ig_by_player"].tolist()
+            "avg_ig_by_player": stats["avg_aggregate_ig_by_player"].tolist(),
+            "avg_accusation_accuracy": stats["avg_accusation_accuracy"].tolist()  # New metric
         })
     
     return results
@@ -749,10 +806,11 @@ if __name__ == "__main__":
     
     # Play at most 10 turns
     for _ in range(10):
-        player, claim = game.play_turn()
+        player, claim, accusation = game.play_turn()
         if game.game_over:
             break
         print(f"Turn {game.current_turn-1}: Player {player} claimed {np.round(claim, 2)}")
+        print(f"                     and accused {np.round(accusation, 2)}")
     
     print(f"Game over! Winner: {game.winner}")
     
@@ -770,4 +828,5 @@ if __name__ == "__main__":
         print(f"  Tie rate: {result['tie_rate']:.2f}")
         print(f"  Average turns: {result['avg_turns']:.2f}")
         print(f"  Average information gain: {np.mean(result['avg_ig_by_player']):.4f}")
+        print(f"  Average accusation accuracy: {np.mean(result['avg_accusation_accuracy']):.4f}")
         print()

@@ -10,7 +10,11 @@ Players who are not the spy knows the location $N$ but not $S$, player who is th
 
 Each turn $t = 1, 2, \dots$, a designated player $j_t \in [s]$ publicly announces a claim $C_t$ that is a probability vector over locations
 
-$$ C_t \in \Delta_n. $$
+$$ C_t \in \Delta_n, $$
+
+and an accusation of spy
+$$ A_{t} \in \Delta_s $$
+of what the probability of each person being a spy is, from their viewpoint. 
 
 At any turn, any player can trigger a game-ending move. 
 * The spy can name the location. If correct, then the spy wins. Otherwise, the non-spy team wins. 
@@ -38,11 +42,11 @@ Then a vote is triggered, and players vote for the most-likely candidate (spy or
 * **Observed**
 
   $$
-    \{(j_t,C_t)\}_{t=1}^T,
+    \{(j_t,C_t, A_t)\}_{t=1}^T,
     \quad j_t\in\{1,\dots,s\},\;
-          C_t\in\Delta_n.
+          C_t\in\Delta_n, \quad A_t \in \Delta_s
   $$
-* **Public game state** up to $t$: (who said what): $\mathcal G_t = \bigl\{(j_u,C_u)\bigr\}_{u=1}^t.$
+* **Public game state** up to $t$: (who said what): $\mathcal G_t = \bigl\{(j_u,C_u, A_u)\bigr\}_{u=1}^t.$
 * **Private info** of player $i$:
 
   $$
@@ -123,6 +127,11 @@ After a draw of $\Gamma_{j_t}$, the public claim is drawn as
 $$
   C_t \;\sim\;\mathrm{Dirichlet}\bigl(\gamma_{j_t,t}\bigr).
 $$
+
+The accusation part: for now, we just keep it simple. 
+- All players (including the spy) will always reveal their private $S_{i,t}$ belief, so this gives an appropriate update for the public belief $S_t$.
+- All player's (including the spy) initial prior belief $S_{i,0}$ is that other people are spy, and not themselves. 
+
 
 # Belief update strategies to implement
 
@@ -208,7 +217,7 @@ $$
 
 * Setup game: draw $N, S$, initialize players (choose their strategy types and initialize their prior parameters)
 * For each turn: 
-    * The speaker computes their emission, announces $C_t$. 
+    * The speaker computes their emission, announces $C_t$, set accusation $A_t = S_{i,t}$.
     * The public beliefs are updated. 
     * Each player updates their private belief. 
     * Check if the end-game threshold for any player has been reached. If so, reaches the endgame. Otherwise, pick next player.  
