@@ -46,7 +46,7 @@ Then a vote is triggered, and players vote for the most-likely candidate (spy or
     \quad j_t\in\{1,\dots,s\},\;
           C_t\in\Delta_n, \quad A_t \in \Delta_s
   $$
-* **Public game state** up to $t$: (who said what): $\mathcal G_t = \bigl\{(j_u,C_u, A_u)\bigr\}_{u=1}^t.$
+* **Public game state** up to $t$: (who said what): $\mathcal G_t = \{(j_u,C_u, A_u)\}_{u=1}^t.$
 * **Private info** of player $i$:
 
   $$
@@ -67,14 +67,14 @@ Then a vote is triggered, and players vote for the most-likely candidate (spy or
 
     $$
       P_{i,t}(\ell)
-      =P\bigl(N=\ell\mid \mathcal G_{t-1},\,\mathrm{priv}_i\bigr)
+      =P(N=\ell\mid \mathcal G_{t-1},\,\mathrm{priv}_i)
       \;\in\;\Delta_n.
     $$
   * Spy belief: a point in $\Delta_s$
 
     $$
       \widehat S_{i,t}(k)
-      =P\bigl(S=k\mid \mathcal G_{t-1},\,\mathrm{priv}_i\bigr)
+      =P(S=k\mid \mathcal G_{t-1},\,\mathrm{priv}_i)
       \;\in\;\Delta_s.
     $$
 
@@ -88,7 +88,7 @@ It is useful to introduce the notation of a Public belief. These are computed wi
 
     $$
       P_{t}(\ell)
-      =P\bigl(N=\ell\mid \mathcal G_{t-1}\bigr)
+      =P(N=\ell\mid \mathcal G_{t-1})
       \;\in\;\Delta_n.
     $$
 
@@ -96,7 +96,7 @@ It is useful to introduce the notation of a Public belief. These are computed wi
 
     $$
       \widehat S_{t}(k)
-      =P\bigl(S=k\mid \mathcal G_{t-1}\bigr)
+      =P(S=k\mid \mathcal G_{t-1})
       \;\in\;\Delta_s.
     $$  
 
@@ -105,9 +105,68 @@ It is useful to introduce the notation of a Public belief. These are computed wi
   * **Public belief update**: public believes (full or marginal) are computed with Bayes update. 
 
 
-## Player strategy
+# Public belief update
 
-A player strategy has two parts
+Public location and spy beliefs can be updated sequentially. 
+
+## Public spy belief update
+
+Let $\hat{S}_{t-1}$ be the previous round's public spy belief. In round $t$, player $j$ is active and they reveal an accusation vector $\alpha_t \in \Delta_s$. If they are the spy (happens with prior probability $\hat{S}_{t-1}(j)$), then our correct update should be $e_j$. If they are not the spy, then they are revealing their true information, so our update should be $\alpha_t$. Therefore, our Bayesian spy belief update equation is
+$$ \hat{S}_t = p_{spy} e_j + (1-p_{spy}) \alpha_t $$
+where $p_{spy}$ = probability that $j$ is a spy = $\hat{S}_{t-1}(j)$. 
+
+
+## Public belief update
+
+Fix $\beta=1$ and $\lambda=0.5$.  Define for each candidate $\ell$:
+
+$$
+\gamma^\mathrm{honest}_\ell
+= (1-\lambda)\mathbf1 + \lambda\,e_\ell
+= 0.5\,\mathbf1 + 0.5\,e_\ell,
+\qquad
+\gamma^\mathrm{spy}
+= (1-\lambda)\mathbf1 + \lambda\,P_{t-1}
+= 0.5\,\mathbf1 + 0.5\,P_{t-1}.
+$$
+
+Since $S_{t-1}(j_t)$ is the probability that the speaker $j = j_t$ is a spy, the mixture-likelihood of the observed claim $C_t\in\Delta_n$ is
+
+$$
+p(C_t\mid N=\ell)
+=(1-S_{t-1}(j_t))\,\mathrm{Dir}(C_t;\gamma^\mathrm{honest}_\ell)
+\;+\;
+S_{t-1}(j_t)\,\mathrm{Dir}(C_t;\gamma^\mathrm{spy}).
+$$
+
+Finally the Bayes update is
+
+$$
+P_t(\ell)
+=\frac{P_{t-1}(\ell)\;p(C_t\mid N=\ell)}
+{\sum_{\ell'=1}^n P_{t-1}(\ell')\;p(C_t\mid N=\ell')}\,.
+$$
+
+# Player belief updates
+
+Speaker does not update their belief.
+
+## Accusation belief updates
+
+Spy is pretending to be a non-spy, so they have the same update rule as non-spy. Furthermore, any player will deny that they are the spy, but is receptive to other suggestions. This means when player $j = j_t$ spoke in round $t$, their accusation updates player $i$'s belief $\hat{S}_{i,t}$ as follows
+$$ \hat{S}_{i,t} = \hat{S}_{i,t-1}(j) e_j + (1-\hat{S}_{i,t-1}(j)) \bar{\alpha}_t, $$
+where $\bar{\alpha}_t$ is the re-normalized version of $\alpha_t$ (the original accusation) but with the $i$-th coordinate zeroed-out. 
+
+# Player strategies
+
+## Accusation strategy
+
+For both spy and non-spy, they will just reveal their private $\hat{S}_{i,t}$. 
+
+
+### Claim strategy
+
+The claim strategy has two parts
 
 * **Private belief update strategy**: this is a function $g_j$ that provides a posterior update to the private belief, given all public information so far (public game state, public beliefs) and past private information (prior private belief, private information). 
 
@@ -117,7 +176,7 @@ Belief update can be simple Bayesian, OR it can be more sophisticated strategies
 
 $$
   \Gamma_{j_t}:
-    \bigl(P_{j_t,t},\,\widehat S_{j_t,t},\,\mathrm{priv}_{j_t}\bigr)
+    (P_{j_t,t},\,\widehat S_{j_t,t},\,\mathrm{priv}_{j_t})
     \;\longrightarrow\;
     \gamma_{j_t,t}\in\mathbb R_{>0}^n.
 $$
@@ -125,7 +184,7 @@ $$
 After a draw of $\Gamma_{j_t}$, the public claim is drawn as
 
 $$
-  C_t \;\sim\;\mathrm{Dirichlet}\bigl(\gamma_{j_t,t}\bigr).
+  C_t \;\sim\;\mathrm{Dirichlet}(\gamma_{j_t,t}).
 $$
 
 The accusation part: for now, we just keep it simple. 
@@ -133,7 +192,9 @@ The accusation part: for now, we just keep it simple.
 - All player's (including the spy) initial prior belief $S_{i,0}$ is that other people are spy, and not themselves. 
 
 
-# Belief update strategies to implement
+
+
+# Player belief update strategies to implement
 
 We will implement these belief updates for players: 
 * Bayes update
@@ -149,7 +210,7 @@ Recall that each speaker $j_t$ computes Dirichlet parameters by a strategy map
 
 $$
   \Gamma_{j_t}:
-    \bigl(P_{j_t,t},\,\widehat S_{j_t,t},\,\mathrm{priv}_{j_t}\bigr)
+    (P_{j_t,t},\,\widehat S_{j_t,t},\,\mathrm{priv}_{j_t})
     \;\longrightarrow\;
     \gamma_{j_t,t}\in\mathbb R_{>0}^n.
 $$
@@ -205,12 +266,12 @@ To quantify the “value” of a new claim, define for any two distributions $p,
 
 $$
   \mathrm{IG}(p,q)
-  =D_{\mathrm{KL}}\bigl(q\;\big\|\;p\bigr)
+  =D_{\mathrm{KL}}(q\;\big\|\;p)
   =\sum_{i=1}^m q_i\log\frac{q_i}{p_i}\;\ge0.
 $$
 
 * **Turn-wise gain**: public information gain at step $t$ (thanks to player $i_t$ sharing information at that step): 
-  $\mathrm{IG}\bigl(P_{i,t-1},\,P_{i,t}\bigr).$
+  $\mathrm{IG}(P_{i,t-1},\,P_{i,t}).$
 * **Aggregate gain of player $i$**: need to compute public information WITHOUT person $i$'s messages, and then compute the information gain of those two distributions. Compute this with running Bayesian updates.  
 
 # Code up the game with Pyro: TODOs

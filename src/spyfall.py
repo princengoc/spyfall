@@ -29,7 +29,7 @@ class SpyfallGameImproved:
 
         # update public beliefs via Pyro
         loc_pub, spy_pub = infer_public(
-            self.history, num_samples=self.num_samples
+            self.history, self.num_locations, self.num_players, num_samples=self.num_samples
         )
         self.public_location_belief = loc_pub
         self.public_spy_belief = spy_pub
