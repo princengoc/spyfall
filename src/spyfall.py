@@ -9,10 +9,12 @@ from pyro.optim import Adam
 from pyro import poutine
 import pprint
 from scipy.special import expit  # inverse of logit
+from typing import Dict
+import numpy as np
+from tqdm import tqdm
 
 
-
-def spyfall_model(T, L, P, i_seq, C_obs=None):
+def spyfall_model(T, L, P, i_seq, C_obs=None, beta_ini = None, lam_ini = None):
     """
     Dynamic Bayes net for Spyfall-inspired game with unknown beta and lambda.
 
@@ -34,8 +36,13 @@ def spyfall_model(T, L, P, i_seq, C_obs=None):
         C_t     : Dirichlet utterance at turn t
     """
     # Priors over model hyperparameters
-    beta = pyro.param("beta", torch.tensor(1.0), constraint=constraints.positive)
-    lam = pyro.param("lam", torch.tensor(0.5), constraint=constraints.unit_interval)
+    if lam_ini is None: 
+        lam_ini = torch.ones(P)*0.5
+    if beta_ini is None:
+        beta_ini = torch.ones(P)
+
+    beta = pyro.param("beta", beta_ini, constraint=constraints.positive)
+    lam = pyro.param("lam", lam_ini, constraint=constraints.unit_interval)
 
     # Enumerate discrete latents
     N = pyro.sample("N",
@@ -48,12 +55,17 @@ def spyfall_model(T, L, P, i_seq, C_obs=None):
     # Initial spy belief
     pi = torch.ones(L) / L
 
+    beta = beta.unsqueeze(-1) # [L,1]
+    lam = lam.unsqueeze(-1) # [L,1]
+
     for t in range(T):
         speaker = i_seq[t]
+        beta_s = beta[speaker]
+        lam_s = lam[speaker]        
         # Non-spy concentration
-        ns_alpha = beta * ((1 - lam) * torch.ones_like(pi) + lam * F.one_hot(N, num_classes=L).float())
+        ns_alpha = beta_s * ((1 - lam_s) * torch.ones_like(pi) + lam_s * F.one_hot(N, num_classes=L).float())
         # Spy concentration
-        spy_alpha = beta * ((1 - lam) * torch.ones_like(pi) + lam * pi)
+        spy_alpha = beta_s * ((1 - lam_s) * torch.ones_like(pi) + lam_s * pi)
         # Mixture per speaker
         mask_spy = (speaker == S).unsqueeze(-1)
         alpha = torch.where(mask_spy, spy_alpha, ns_alpha)
@@ -65,7 +77,7 @@ def spyfall_model(T, L, P, i_seq, C_obs=None):
         # Spy belief update: compute ell(k) = p(C_t | N = k), then weight those secenarios by pi
         ell = torch.zeros_like(pi)
         for j in range(L):
-            a_j = beta * ((1 - lam) * torch.ones_like(pi) + lam * F.one_hot(torch.tensor(j), num_classes=L).float())
+            a_j = beta_s * ((1 - lam_s) * torch.ones_like(pi) + lam_s * F.one_hot(torch.tensor(j), num_classes=L).float())
             ell_j = torch.exp(dist.Dirichlet(a_j).log_prob(C_t))
             ell[..., j] = ell_j
         # Lock spy's own component
@@ -93,20 +105,31 @@ def extract_observations(samples, idx):
     L = samples['C_0'].shape[-1]
     # Stack C_t
     C_obs = torch.stack([samples[f'C_{t}'][idx] for t in range(T)], dim=0)
-    beta_true = pyro.param("beta").item()
-    lam_true  = pyro.param("lam").item()
+    beta_true = pyro.param("beta").detach().numpy()
+    lam_true  = pyro.param("lam").detach().numpy()
     true_N = int(samples['N'][idx])
     true_S = int(samples['S'][idx])
     return C_obs, beta_true, lam_true, true_N, true_S
 
 
-def infer_posterior(T, L, P, i_seq, C_obs, num_steps=2000, lr=1e-2):
+def infer_posterior(T, L, P, i_seq, C_obs, num_steps=2000, lr=1e-2, N = None, S = None, verbose=False):
     """
     Infer posterior over (beta, lam, N, S) via SVI with enumeration.
+
+    Non-spy inference: known N, find S
+    spy inference: known S, find N
     """
+    data={f"C_{t}": C_obs[t] for t in range(T)}
+    if N is not None: 
+        assert S is None, 'cannot infer if both N and S are supplied'
+        data['N'] = N
+    if S is not None: 
+        assert N is None, 'cannot infer if both N and S are supplied'
+        data['S'] = S
+
     conditioned = pyro.condition(
         spyfall_model,
-        data={f"C_{t}": C_obs[t] for t in range(T)}
+        data=data        
     )
 
     # empty guide since we don't have continuous variational parameters
@@ -117,21 +140,49 @@ def infer_posterior(T, L, P, i_seq, C_obs, num_steps=2000, lr=1e-2):
     optim = Adam({"lr": lr})
     svi = SVI(conditioned, guide, optim, loss=TraceEnum_ELBO())
     for step in range(num_steps):
-        loss = svi.step(T, L, P, i_seq, C_obs)
-        if step % (num_steps // 5) == 0:
+        if N is not None:
+            loss = svi.step(T, L, P, i_seq, C_obs, N)
+        elif S is not None: 
+            loss = svi.step(T, L, P, i_seq, C_obs, S)
+        else: 
+            loss = svi.step(T, L, P, i_seq, C_obs)
+        if verbose and step % (num_steps // 5) == 0:
             print(f"Step {step:4d} \tLoss = {loss:.3f}")
 
-    beta_post = pyro.param("beta").item()
-    lam_post  = pyro.param("lam").item()
+    beta_post = pyro.param("beta").detach().numpy()
+    lam_post  = pyro.param("lam").detach().numpy()
 
     # Exact discrete marginals
     marginals = TraceEnum_ELBO().compute_marginals(
         conditioned, guide, T, L, P, i_seq, C_obs
     )
     # convert logits to probabilities
-    qN = expit(marginals['N'].logits.detach().numpy()).round(4)
-    qS = expit(marginals['S'].logits.detach().numpy()).round(4)
+    if N is None:
+        qN = expit(marginals['N'].logits.detach().numpy()).round(4)
+    else: 
+        qN = np.ones(L) * np.nan
+    if S is None:
+        qS = expit(marginals['S'].logits.detach().numpy()).round(4)
+    else: 
+        qS = np.ones(P) * np.nan
     return beta_post, lam_post, qN, qS
+
+def get_outcomes(result: Dict): 
+    """Get game outcomes assuming that this is the last turn"""
+    if not np.all(np.isnan(result['qS'])): 
+        top_spy_suspect = np.argmax(result['qS'])
+    else: 
+        top_spy_suspect = -1
+    if not np.all(np.isnan(result['qN'])): 
+        top_location_suspect = np.argmax(result['qN'])
+    else: 
+        top_location_suspect = -1
+    outcomes = {}
+    outcomes['spy_found'] = top_spy_suspect == result['true_S']
+    outcomes['loc_found'] = top_location_suspect == result['true_N']
+    outcomes['spy_max_p'] = np.max(result['qS'])
+    outcomes['loc_max_p'] = np.max(result['qN'])
+    return outcomes
 
 def run_experiment(
     T: int,
@@ -141,6 +192,7 @@ def run_experiment(
     num_samples: int = 50,
     num_steps: int = 1000,
     lr: float = 1e-2,
+    mode = 'public'
 ) -> list[dict]:
     """
     1. Generate `num_samples` trajectories under the prior.
@@ -154,12 +206,24 @@ def run_experiment(
     """
     samples = sample_prior(T, L, P, i_seq, num_samples)
     results = []
+    outcomes = []
 
-    for idx in range(num_samples):
+    for idx in tqdm(range(num_samples)):
         C_obs, beta_true, lam_true, true_N, true_S = extract_observations(samples, idx)
-        beta_post, lam_post, qN, qS = infer_posterior(
-            T, L, P, i_seq, C_obs, num_steps=num_steps, lr=lr
-        )
+        if mode == 'spy':
+            beta_post, lam_post, qN, qS = infer_posterior(
+                T, L, P, i_seq, C_obs, num_steps=num_steps, lr=lr, S = torch.tensor(true_S)
+            )
+        elif mode == 'nonspy': 
+            beta_post, lam_post, qN, qS = infer_posterior(
+                T, L, P, i_seq, C_obs, num_steps=num_steps, lr=lr, N = torch.tensor(true_N)
+            )            
+        else: 
+            # public mode, both N and S are unknown
+            beta_post, lam_post, qN, qS = infer_posterior(
+                T, L, P, i_seq, C_obs, num_steps=num_steps, lr=lr
+            )            
+
         result = {
             "beta_true": beta_true,
             "lam_true": lam_true,
@@ -171,8 +235,21 @@ def run_experiment(
             "qS": qS,
         }
         results.append(result)
-    return results
+        outcome = get_outcomes(result)
+        # record some meta data
+        outcome['T'] = T
+        outcome['P'] = P
+        outcome['L'] = L
+        outcome['true_N'] = true_N
+        outcome['true_S'] = true_S
+        outcomes.append(outcome)
 
+    return results, outcomes
+
+
+
+# experiment functions
+## spy inference: 
 
 
 if __name__ == '__main__':
@@ -181,12 +258,13 @@ if __name__ == '__main__':
     L = 10
     i_seq = [t % P for t in range(T)]
 
-    results = run_experiment(
+    results, outcomes = run_experiment(
         T=T, L=L, P=P,
         i_seq=i_seq,
         num_samples=1,
-        num_steps=300,
-        lr=1e-2
+        num_steps=200,
+        lr=1e-2, 
+        mode='nonspy'
     )
 
-    pprint.pprint(results, indent=2, depth=3, compact=False)
+    pprint.pprint(outcomes, indent=2, depth=3, compact=False)
