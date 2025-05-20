@@ -20,43 +20,42 @@ def spyfall_dbn_model(C_obs, player_index, n_players=6):
 
     one_hot_loc = torch.nn.functional.one_hot(N_true, L).float()
     # concentration parameter for non-spy
-    loc_alpha = beta * ((1.0 - lam) + lam * one_hot_loc)  # [enum_N, L]
+    loc_alpha_true = beta * ((1.0 - lam) + lam * one_hot_loc)  # [L]
 
     # spy's location prior distribution, will be updated sequentially
-    pi = torch.ones(n_players, n_locations) / n_locations   # shape [P, L]
-    eye_p = torch.eye(n_players)                       # [P,P]
+    pi    = torch.ones(n_players, L) / L
+    eye_p = torch.eye(n_players)
 
     for t in pyro.markov(range(T)):
-        claim = C_obs[t]                                # [L]
+        claim = C_obs[t]  # shape [L]
 
-        # 1) spy‐mask via Vindex
-        one_hot_spy = Vindex(eye_p)[S_true]             # [enum_S, 1, P]
-        mask        = one_hot_spy[..., player_index[t]] # [enum_S, 1]
+        # — build a per‐hypothesis speaker mask: [enum_S, 1]
+        mask = (torch.arange(n_players) == player_index[t]).unsqueeze(-1)  # [enum_S,1]
 
-        # 2) Bayes‐update spy’s belief pi over locations
-        alphas0 = beta * ((1.0 - lam) + lam * torch.eye(L))
-        C_rep   = claim.unsqueeze(0).expand(L, -1)      # [L, L]
-        # p(C|N_t=i), for i in [L]
+        # — Bayes update of spy belief (batching over P via mask)
+        alphas0 = beta * ((1.0 - lam) + lam * torch.eye(L))    # [L,L]
+        C_rep   = claim.unsqueeze(0).expand(L, L)              # [L,L]
         ls      = torch.exp(dist.Dirichlet(alphas0).log_prob(C_rep))  # [L]
-        # bring into players’ enum dim:
-        ls_b    = ls.unsqueeze(0).expand(n_players, L)  # [enum_S, L]
-        # update pi based on mask 
+        ls_b    = ls.unsqueeze(0).expand(n_players, L)        # [enum_S,L]
+
         pi_bayes = pi * ls_b
-        pi_bayes = pi_bayes / pi_bayes.sum(dim=-1, keepdim=True)   # [P, L]
-        pi = mask * pi + (1.0 - mask) * pi_bayes   # [P, L]
+        pi_bayes = pi_bayes / pi_bayes.sum(dim=-1, keepdim=True)      # [enum_S,L]
 
-        # 3) mix spy vs. non‐spy concentration
-        alpha_ns = loc_alpha.unsqueeze(0)\
-                     .expand(n_players, L, L)          # [enum_S, L, L]
-        alpha_sp = (beta * ((1.0 - lam) + lam * pi))\
-                     .unsqueeze(1)\
-                     .expand(n_players, L, L)          # [enum_S, L, L]
-        alpha_mx = mask.unsqueeze(-1) * alpha_sp \
-                   + (1.0 - mask).unsqueeze(-1) * alpha_ns   # [enum_S, L, L]
+        # — mix “no‐update if spy spoke” vs full Bayes update
+        pi = torch.where(mask, pi, pi_bayes)                    # [enum_S,L]
 
-        # 4) observe / sample claims
+        # non‐spy and spy concentrations [enum_S,L]
+        alpha_ns = beta * ((1 - lam) + lam * one_hot_loc)
+        alpha_ns = alpha_ns.unsqueeze(0).expand(n_players, L)
+
+        alpha_sp = beta * ((1 - lam) + lam * pi)       # [enum_S,L]
+
+        # choose per-hypothesis
+        alpha_mix = torch.where(mask, alpha_sp, alpha_ns)  # [enum_S,L]
+
+        # — observe claims as an L‐vector event
         pyro.sample(f"claims_{t}",
-                    dist.Dirichlet(alpha_mx).to_event(2),
+                    dist.Dirichlet(alpha_mix).to_event(1),
                     obs=claim)
 
     return N_true, S_true
