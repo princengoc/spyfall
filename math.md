@@ -16,7 +16,7 @@ At any turn, any player can trigger a game-ending move.
 * The spy can name the location. If correct, then the spy wins. Otherwise, the non-spy team wins. 
 * A non-spy can trigger a collective (majority vote) to name the spy. If correct, AND if the spy cannot name the location (this serves as "conclusive proof" that they are indeed the spy), then the non-spy team wins. Otherwise, the the spy wins (though in the codes we record this as a "tie" when we test out strategies). 
 
-# Spyfall with PPL
+# Spyfall as a probabilistic program
 
 For a first implementation, we make some simplifying assumptions. These can be relaxed to add more human-like dynamics later.  
 
@@ -46,8 +46,8 @@ where $j_t$ is the index of the speaker of that round, and $C_t$ is his claim. A
 $$
 \alpha(j_t) = 
 \begin{cases}
-  \beta \big((1 - \lambda) \mathbf{1} + \lambda \mathbf{e}_N\big) & \text{if } j_t \neq S \\
-  \beta \big((1 - \lambda) \mathbf{1} + \lambda \pi_t\big) & \text{if } j_t = S
+  \big(\mathbf{1} + (\theta-1) \mathbf{e}_N\big) & \text{if } j_t \neq S \\
+  \big(\mathbf{1} + (\theta-1) \pi_t\big) & \text{if } j_t = S
 \end{cases} \quad  \in \Delta_{n-1}.
 $$
 
@@ -58,26 +58,264 @@ $$
 \propto \mathbb{P}(C_t | N =k)\pi_t(k)
 \end{cases},
 $$
-where $P(C_t | N = k)$ is the Dirichlet with concentration $\alpha = \beta \big((1 - \lambda) \mathbf{1} + \lambda \mathbf{e}_k\big)$ above. 
+where $P(C_t | N = k)$ is the Dirichlet with concentration $\alpha = \big(\mathbf{1} + (\theta-1) \mathbf{e}_k\big)$ above. 
 
-### Interpretations
+### Interpretations: $\theta$ as strategy parameter
 
-Here, $\lambda$ is how much we information to reveal, and $\beta$ is the Dirichlet concentration parameter, which controls how sharp we want the message to be (close to our intended point, more like uniform, or more on the edge of the simplex). 
+Here, $\theta$ is how much we information to reveal and it forms our "strategy" or "personality" of the player. This latent parameter can be learned by `pyro`. Higher $\theta$ means we reveal more information about our true belief, smaller $\theta$ means we emit vague, or even wrong claim opposite our belief (when $\theta < 1$).  
 
-* $\lambda \approx 1$, high $\beta$: Dirichlet is sharply concentrated near $P_{j_t,t}$. Player reveals their true private belief. 
-* $\lambda \approx 1$, low $\beta$: Dirichlet is more concentrated on the vertices of the simplex, but biased towards the highest coordinate of $P_{j_t,t}$. This has the behavior that the player is revealing a small subset of locations that contain their  true private belief. 
-* $\lambda \approx 0$, high $\beta$: Player is revealing nothing: makes vague statements that say along the lines of "all locations are equally likely".
-* $\lambda \approx 0$, low $\beta$: Player is bluffing. 
+The reason we choose this parametrization is that the Dirichlet is the normalization of a $Gamma(\theta, 1)$ and a bunch of independent exponentials $exp(1)$. Then $\theta$ is an integer, in particular, it is easy to do exact computations. (See the **Puzzle** section below). 
 
-These parameters are constant to the player, suggesting "personality" (cautious at reveal information vs eager to show others that they are not the spy). They are fixed and can be learned by ``pyro``. 
+# Spyfall through the lens of Probability and Information Theory
 
-### Strategy parameters
+The problem is small enough that we can analyze its behavior analytically. This turned out to be a really nice exercise with some interesting math puzzles. 
 
-The spy strategy here is Bayes update on the public information (the claims). The only "strategy parameters" are $\beta$ and $\lambda$, that controls the "player personality".
+Note that our claim $C_t \in \Delta_{n-1}$ of a non-spy is the normalized version of the vector $(X_1, \cdots, X_n) \in \mathbb{R}^n$, where $X_i$'s are independent, and 
+$$ X_i \sim 
+\begin{cases}
+exp(1) & \text{if } i \neq N \\
+Gamma(\theta, 1) & \text{if } i = N \\
+\end{cases}.
+$$ 
+Now suppose that $\theta \in \mathbb{N}$ is an integer. Then we get an even better representation: take a sequence of $n+\theta-1$ i.i.d $exponential(1)$, sum up the first $\theta$, that is our $X_N$, while the rest are the other $X_i$'s. 
+
+Now we are ready to derive some interesting formulas. 
+
+## Can the spy pins down the location after just one claim?
+
+Suppose $T = 1$ and the speaker is a nonspy, so the speaker reveals $(X_1, \dots, X_n)$. If the game ends immediately and the spy is forced to make a best-guess of the location $N$, then clearly it should guess the index $i$ where $X_i$ is largest, ie
+$$ \hat{N} = argmax \{X_i, i = 1, \dots, n\}. $$
+
+Then the spy's probability of being correct is
+$$ \mathbb{P}(\hat{N} = N) = \mathbb{P}(Gamma(\theta,1) > \max_{i=1,\dots,n-1} \epsilon_i) = \mathbb{E}((1-e^{-X})^{n-1}), $$
+where $X \sim Gamma(\theta,1)$, and $\epsilon_i$ are i.i.d $exponential(1)$. 
+
+### Theorem 1. Spy win probability after 1 claim
+**Theorem 1.** Denote the spy's win probability by $F(\theta,n)$. Then this function satisfies the following recursion 
+<!-- in $\theta$
+$$ F(\theta,n) = \frac{1}{\theta-1} \sum_{i=1}^{\theta-1} H_n^{(\theta-i)} F(i, n) \quad \text{for } \theta \geq 2, $$
+where $H_n^{(m)} = \sum_{j=1}^n j^{-m}$. It also satisfies the following recursion in $n$ -->
+$$ F(\theta,n) = \frac{1}{n}\sum_{i=1}^nF(\theta-1,i),  $$
+with initial conditions
+$$ F(1,n) = \frac{1}{n}, F(\theta,1) = 1.$$
+
+---
+
+### Implication: For $N = 10$ locations, spy has about 30% of winning after just one claim!
+
+Let's look at some example values for $\theta$
+* $F(1,n) = \frac{1}{n}$. The claim has zero information, spy's win probability is always $1/n$ (randomly guess a location). 
+* $F(2,n) = \frac{H_n}{n} \sim \frac{\log n}{n}$, where $H_n = \sum_{i=1}^n \frac{1}{i}$ is the $n$-th harmonic number. This grow of $(\log n)/n$ is pretty slow. 
+* $F(3,n) = \frac{1}{n} \sum_{i=1}^n H_i/i = \frac{1}{n} \frac{1}{2} (H_n^2 + H_n^{(2)}), $
+where $H_n^{(2)} = \sum_{k=1}^n \frac{1}{k^2}$. Asymptotically, this is $\frac{(\log n)^2}{2n}.$ Still pretty small. 
+
+Now, realistically the game has small $n$ (would be really hard for humans to play otherwise), so $H_n^2$ can still have a significant contribution. Indeed, if $\theta = 3$, and the number of locations $n = 10$, then after just **one claim**, the spy has a 50% of winning!
+
+![](./prob_spy_win_one_claim.png)
+
+Below, we ran simulation with $\theta = 2$. That should give the spy the 30% chance of winning after the first claim. 
+
+---
+
+**Proof of Theorem 1.** GPT-4 can give you a brute-force computation (with error). But let us go for an elegant probabilistic proof. Introduce i.i.d $exponential(1)$ random variables $E_1, \dots, E_{\theta-1}$ and $Y_1, \dots, Y_n$. Our problem is to compute
+$$ F(\theta,n) = \mathbb{P}(E_1 + \dots E_{\theta-1} + Y_1 > \max_{i=1,\dots,n} Y_i). $$
+Now, take the $Y_1, \dots, Y_n$, and let $O_n < O_{n-1} < \dots < O_1$ be their order statistics, ie $O_n$ = smallest $Y_i$'s, $O_1$ = largest $Y_i$. Then we can write the $O_i$'s as partial sums of the sequence $(Z_n, Z_{n-1}, \dots, Z_1)$ where $Z_i \sim exponential(i)$ and the $Z_i$'s are independent. That is, 
+$$
+\begin{align*}
+O_n &= Z_n, \\ 
+O_{n-1} &= Z_n + Z_{n-1} \\
+O_{n-2} &= Z_n + Z_{n-1} + Z_{n-2} \\
+\vdots \\
+O_1 &= Z_n + \dots + Z_1.
+\end{align*}
+$$
+In particular, 
+$$O_1 = O_i + (Z_{i-1} + \dots + Z_1) \stackrel{d}{=} O_i + M_{i-1}$$ 
+where $M_{i-1} = \max_{j=1,\dots,i-1}\{W_j\}$ is the max of $i-1$ independent standard exponentials, independent of $O_i$. 
+
+We can now write our problem as
+$$ F(\theta,n) = \mathbb{P}(E_1 + \dots E_{\theta-1} + Y_1 > M_{n-1}) = \mathbb{P}(E_1 + \dots E_{\theta-1} + Y_1 > O_1). $$
+Now, let's condition on the event that $Y_1 = O_i$ (that is, $Y_1$ is the i-th order statistic). Then 
+$$ 
+\begin{align*}
+\mathbb{P}(E_1 + \dots E_{\theta-1} + Y_1 > O_1 | Y_1 = O_i) 
+&= \mathbb{P}(E_1 + \dots E_{\theta-1} + O_i > O_i + M_{i-1} | Y_1 = O_i) \\
+&= \mathbb{P}(E_1 + \dots E_{\theta-1} > M_{i-1} ) \\
+&= \mathbb{P}(E_1 + \dots E_{\theta-2} + Y_1 > M_{i-1} ) \\
+&= F(\theta-1,i).
+\end{align*}
+$$
+Now, $P(Y_1 = O_i) = \frac{1}{n}$. Therefore,
+$$ F(\theta,n) = \frac{1}{n}\sum_{i=1}^nF(\theta-1,i).  $$
+QED. 
+
+---
+
+## Can `nonspy` finds the spy after just ONE claim? 
+
+### Lemma: Spy is caught w.p. 60% after one shot IF they spoke first.
+
+**Lemma.** If $\theta = 2$ and the spy is the first speaker, then the probability of spy getting caught for large $n$ is about 60%. 
+
+**Rough proof.** The question is whether we can tell that a sample $C_1$ drawn from $Dirichlet(\mathbf{1})$ is "unlikely" to be drawn from a $Dirichlet(\mathbf{1} + (\theta-1) \mathbf{e}_N)$. 
+
+More abstractly, let $Z \sim Bernoulli(p)$ be a latent variable (indicator of `speaker is spy` in our case). If $Z = 1$, we draw $C$ from distribution $P$ (spy, uniform Dirichlet), while if $Z = 0$, we draw $C$ from distribution $Q$ (nonspy, has $\theta$ at the preferred coordinate). We are interested in "how much information $C$ carries on $Z$". 
+
+Suppose that the spy spoke first, so really $C$ was drawn from $P$. Then, by Neyman-Pearson lemma, the best test (most power for a given alpha) is a likelihood ratio test, ie, rat out the spy whenever the likelihood ratio
+$$ \Lambda = \frac{\mathbb{P}(C| Z=1)}{\mathbb{P}(C | Z = 0)} $$
+exceeds some threshold $\tau$. Concretely, if $\theta = 2$, and that our decision rule is that if $\Lambda > 1$ then we vote that the speaker is spy (speaker raises suspicion after speaking). Then we find that
+$$ \mathbb{P}(\Lambda > 1) = \mathbb{P}(C(i^\ast) < \frac{1}{n}), $$
+that is, we find the spy "sus" whenever the true location $i^\ast$ is declared to have probability below $1/n$ in his output. And this happens with probability $\sim 1-(1-\frac{1}{n-1})^{n-1} \approx 1 - e^{-1} \approx 0.63$. So for large $n$ and $\theta = 2$, the **spy gets caught if they go first with probability of about 60%**. QED
+
+
+--- 
+
+## The game is biased towards the spy winning
+
+From our results, it seems that the `spy` has a huge advantage in this game as the number of players increase. Suppose $T = 1$: only one random speaker speaks before everybody has to vote. Assume $\theta = 2$ and $n$ is about 10. Then
+
+* with probability $1/s$, the spy speaks first. In this case, there is a 60% chance that the spy is caught, while the spy's chance to win is only $1/n$.
+* with probability $1-1/s$, someone else speaks first. In this case, there is a 30% chance that the spy wins, while the `nonspy` chance to win is only $1/s$.  
+
+Indeed, we can formalize this with mutual information. 
+
+### Lemma. For fixed $n$, a claim $C$ contributes $O(1/s)$ information on the spy but $O(1)$ information on the location
+
+Continue from our first-speaker analysis. Suppose that we are a public observer, so we do not know if $C$ was truly sampled from $P$ or not. Then one way to quantify "how much information $C$ carries on $Z$" is to use the mutual information $I(Z ; C)$. For this mixture problem, it is
+$$ I(Z ; C) = p D(P || M) + (1-p) D (Q || M), $$
+where $M = p P + (1-p) Q$ is our prior distribution of $C$ (mixture of $P$ and $Q$). We see the issue: $I(Z ; C) \sim O(1/s)$. So a claim coming from a player carries $O(1/s)$ nats on $Z$, because there is only a $1/s$ chance of the speaker being the spy. 
+
+Meanwhile, the mutual information between $C$ (the claim) and $N$ (the location) is
+$$ I(N; C) = H(N) - H(N | C) = \frac{s-1}{s} D(Q || \bar{Q}), $$
+where $Q$ is our Dirichlet of the non-spy as before, and $\bar{Q}$ is the average of the non-spy dirichlets over possible locations, ie $\bar{Q} = \frac{1}{n} \sum_{i=1}^n Dirichlet(\mathbf{1} + (\theta-1)\mathbf{e}_i)$. 
+
+So for fixed $n$, this is an $O(1)$ amount of information, as opposed to $O(1/s)$. QED
+
+##  Aside: Pinker's lemma
+
+I was looking for a cheap bound on some measure of power or accuracy of our likelihood ratio test and the KL divergence $D(P || Q)$, which is our "expected likelihood ratio". GPT4 helpfully suggested the following lemma that connects (hypothesis test accuracy) to $d_{TV}(P,Q)$: 
+
+**Proposition.**
+In the simple hypothesis‐testing problem
+
+$$
+H_1:\;C\sim P,\quad H_0:\;C\sim Q,
+$$
+
+with equal priors $\Pr(H_1)=\Pr(H_0)=\tfrac12$, the Bayes‐optimal decision rule achieves
+
+$$
+P_{\rm corr}^{*}
+\;=\;
+\Pr(\text{correct})
+\;=\;
+\frac{1}{2}\,\bigl(1+\|P-Q\|_{TV}\bigr),
+$$
+
+where
+$\displaystyle\|P-Q\|_{TV}=\sup_{A}\lvert P(A)-Q(A)\rvert =\tfrac12\int|\,p(c)-q(c)\,|\,dc$.
+
+---
+
+### Proof (written by GPT o4-mini-high)
+
+1. **Optimal rule.**
+   By the Neyman–Pearson / Bayes argument, the optimal classifier is
+
+   $$
+   \delta(c)
+   \;=\;
+   \begin{cases}
+     1,&p(c)\ge q(c),\\
+     0,&p(c)< q(c),
+   \end{cases}
+   $$
+
+   i.e.\ decide $H_1$ on the region
+   $\;A=\{c:p(c)\ge q(c)\}$.
+
+2. **Probability of correct decision.**
+
+   $$
+   P_{\rm corr}^{*}
+   =\tfrac12\,\Bigl[\Pr_{P}(\delta=1)+\Pr_{Q}(\delta=0)\Bigr]
+   =\tfrac12\Bigl[\int_{A}p(c)\,dc\;+\;\int_{A^c}q(c)\,dc\Bigr].
+   $$
+
+3. **Express in terms of $\max$ or $\min$.**
+   Observe
+
+   $$
+   \int_{A}p
+   =\int_{A}q \;+\;\int_{A}(p-q)
+   =\Bigl(1-\!\int_{A^c}q\Bigr)\;+\;\int_{A}(p-q),
+   $$
+
+   so
+
+   $$
+   \int_{A}p\;+\;\int_{A^c}q
+   =1\;+\;\int_{A}(p-q)
+   =\int\max\{p,q\}.
+   $$
+
+   Hence
+
+   $$
+   P_{\rm corr}^{*}
+   =\tfrac12\int\max\{p(c),q(c)\}\,dc.
+   $$
+
+4. **Relate to total variation.**
+   Use the identity
+
+   $$
+   \max\{p,q\}
+   =\frac{p+q}{2}\;+\;\frac{|p-q|}{2},
+   $$
+
+   so
+
+   $$
+   \int\max\{p,q\}
+   =\int\frac{p+q}{2} \;+\;\int\frac{|p-q|}{2}
+   =1\;+\;\|P-Q\|_{TV}.
+   $$
+
+   Therefore
+
+   $$
+   P_{\rm corr}^{*}
+   =\tfrac12\bigl(1+\|P-Q\|_{TV}\bigr),
+   $$
+
+   as claimed.
+   Equivalently, the minimal error probability is
+   $\;P_e^*=1-P_{\rm corr}^*=\tfrac12(1-\|P-Q\|_{TV})$. \qed
+
+---
+
+Now, Pinsker's lemma upperbounds total variation distance by the KL divergence. This is a "best case" accuracy scenario (ideally we would want a lower bound), but it's interesting nonetheless. We learned that there is also the [Bretagnolle–Huber bound](https://arxiv.org/pdf/2202.07198), though for our case, Pinsker's bound is better. 
+
+#### The BH bound
+
+$$ \|P-Q\|_{TV} \leq \sqrt{1 - e^{-D(P || Q)}}. $$
+
+#### Pinsker's inequality
+
+$$ \|P-Q\|_{TV} \leq \sqrt{\frac{1}{2} D(P || Q)}. $$
+
+Now, for $\theta = 2$, $D(P || Q) = H_{n-1} - \log n$. For our case, the BH bound is worse. 
+
+![](./bh_vs_pinsker.png)
+
+Given that our exact calculation comes out to about 63% (dotted line) when the number of players $s$ is large, Pinsker's bound is pretty good. 
+
+--- 
 
 # Implementation 
 
-I use [pyro](https://pyro.ai/), a Python package for probabilsitic programming. I find the [tutorial](https://pyro.ai/examples/intro_long.html) to be quite good, though details are lacking once we want to dig deeper on specific functions. For example, I struggled to get parallel[enumeration](https://pyro.ai/examples/enumeration.html) to work `pyro.markov` without having to do a lot of ``.unsqueeze(1).expand(...)`` gymnastics. In the end, I opted for a simple `for` loop. Probably not the most efficient, but considering that $n, T, s \sim 1e1$ for my case, it really doesn't matter. Using ``pyro`` is bit of an overkill, as our inference is exact, but it's a good excuse to learn `pyro`. For fixed $\beta, \lambda$, an online update will yield the posterior of $N$ and $S$ in $O(T \cdot (s+ n))$. I'm not 100% sure on `pyro` `TraceEnum_ELBO` implementation, but I suspect that it's $O(T (s^2+n^2))$, vectorized over $s$ and $n$ in the parallel enumeration step. 
+I use [pyro](https://pyro.ai/), a Python package for probabilsitic programming. I find the [tutorial](https://pyro.ai/examples/intro_long.html) to be quite good, though details are lacking once we want to dig deeper on specific functions. For example, I struggled to get parallel[enumeration](https://pyro.ai/examples/enumeration.html) to work `pyro.markov` without having to do a lot of ``.unsqueeze(1).expand(...)`` gymnastics. In the end, I opted for a simple `for` loop. Probably not the most efficient, but considering that $n, T, s \sim 1e1$ for my case, it really doesn't matter. Using ``pyro`` is bit of an overkill, as our inference is exact, but it's a good excuse to learn `pyro`. For fixed $\theta$, an online update will yield the posterior of $N$ and $S$ in $O(T \cdot (s+ n))$. I'm not 100% sure on `pyro` `TraceEnum_ELBO` implementation, but I suspect that it's $O(T (s^2+n^2))$, vectorized over $s$ and $n$ in the parallel enumeration step. 
 
 ## Pyro on Spyfall
 
@@ -91,15 +329,7 @@ $$ \mathbb{E}_{q(z|x)} (\log(\frac{p(x,z)}{q(z|x)})) = \sum_z q(z|x)\log(p(x,z) 
 So `pyro` enumerates all possiblities of $z$ in parallel and finds $q(z|x)$ (ie the distributions of $N$ and $S$) by optimizing the ELBO over $\mathbb{R}^{n+s-2}$, which can be solved exactly in one step. For our game, this means `pyro` keep track of $ns$ many cases of "site is $i$, spy is $j$", and for each case, compute its likelihood given the data. 
 
 ### Effect of the strategy parameters 
-One nice thing about ``pyro`` is that we can use SVI to learn the hyper parmeters like $\beta, \lambda$ with constraints just by declaring them as ``pyro.param``. We found that the exact values of $\beta, \lambda$ doesn't really move the loss all that much when all players share the same param. We had a variational implementation as well, which can introduce a correlation between $\beta$ and $\lambda$. In particular, let's assume that $logit(\lambda)$ and $\log(\beta)$ are correlated normal. If this correlation $\rho > 0$, this means that the player tends to be "honest and direct" when they want to convince others that they are not the spy. If $\rho < 0$, then the player tends to give "vague hint" in such situations as opposed to direct hints. This is quite interesting, so it would be interesting to learn a human's $\beta, \lambda$ with such a variational approach in a human-facing version of the game. (FUTURE work).
+One nice thing about ``pyro`` is that we can use SVI to learn the hyper parmeters like $\theta$ with constraints just by declaring them as ``pyro.param``. See the **findings** section below. 
 
 # Findings
 
-
-
-<!-- Player strategies will manifest as different assumptions on the joint probability of the model. This makes it easy and interesting to test for effects such as
-* a player changes their claim strategy from being "vague" to "sharp" 
-* what happens to over-optimized players who have mistaken assumptions on how others behave
-* win rates of naive vs calculating player
-* what is the most robust strategy for a spy
-* what is the most robust strategy for non-spy -->
