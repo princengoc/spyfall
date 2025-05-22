@@ -8,7 +8,6 @@ from pyro.infer.predictive import Predictive
 from pyro.optim import Adam
 from pyro import poutine
 import pprint
-from scipy.special import expit  # inverse of logit
 from typing import Dict
 import numpy as np
 from tqdm import tqdm
@@ -134,7 +133,8 @@ def infer_posterior(T, L, P, i_seq, C_obs, num_steps=2000, lr=1e-2, N = None, S 
         pass
 
     optim = Adam({"lr": lr})
-    svi = SVI(conditioned, guide, optim, loss=TraceEnum_ELBO())
+    elbo_loss = TraceEnum_ELBO()
+    svi = SVI(conditioned, guide, optim, loss=elbo_loss)
     for step in range(num_steps):
         if N is not None:
             loss = svi.step(T, L, P, i_seq, C_obs, N)
@@ -149,16 +149,16 @@ def infer_posterior(T, L, P, i_seq, C_obs, num_steps=2000, lr=1e-2, N = None, S 
     theta_post = 2
 
     # Exact discrete marginals
-    marginals = TraceEnum_ELBO().compute_marginals(
+    marginals = elbo_loss.compute_marginals(
         conditioned, guide, T, L, P, i_seq, C_obs
     )
     # convert logits to probabilities
     if N is None:
-        qN = expit(marginals['N'].logits.detach().numpy()).round(4)
+        qN = marginals['N'].probs.detach().numpy().round(4)
     else: 
         qN = np.ones(L) * np.nan
     if S is None:
-        qS = expit(marginals['S'].logits.detach().numpy()).round(4)
+        qS = marginals['S'].probs.detach().numpy().round(4)
     else: 
         qS = np.ones(P) * np.nan
     return theta_post, qN, qS
@@ -269,7 +269,7 @@ if __name__ == '__main__':
                 T=T, L=L, P=P,
                 i_seq=i_seq,
                 num_samples=1000,
-                num_steps=2,
+                num_steps=1,
                 lr=1e-2, 
                 mode=mode, 
                 verbose=False
