@@ -344,9 +344,11 @@ One nice thing about ``pyro`` is that we can use SVI to learn the hyper parmeter
 
 # Findings
 
+## One game demo
+
 We run experiments with 3 players and 10 locations. 3 players should be the most "fair" game, with least built-in advantage for the spy. 
 
-### One game demo: The spy and non-spy are more "confident" than the public
+### The spy and non-spy are more "confident" than the public
 
 This is natural, for they have exact private information so they only need to marginalize either $N$ or $S$, while the public needs to marginalize both. 
 
@@ -366,10 +368,12 @@ The claim distributions explains what "sways" the spy and the public
 
 ---
 
+## Multiple runs 
+
 Below are "mass repeats" results. Unlike the one-run example above, I didn't bother with reusing samples since the runtime is small, so each setting is ran $1000 \times 3$ times, each 1000 batch supplies data to run inference from the viewpoint of one of three mode: `spy` ($S$ known), `nonspy` ($N$ known), or public (neither known).
 
 
-### $T = 1$ math is verified
+### $T = 1$ math works (math is awesome)
 
 As expected, the spy's chance of finding the location is about 30% after seeing one non-spy sample (solid gray line).
 
@@ -381,14 +385,14 @@ and the non-spy has a 63% chance (gray) of one-shot finding the spy.
 
 Our code defines that "spy is found" if the posterior distribution of $S$ has a unique max. That is, there is no "coin-toss", the `nonspy` or the `public` must be accusing one person with conviction that they are the spy. So if the spy is not the speaker, the probability of finding the spy is 0, since the posterior max is equally split between the two non-speakers. Similarly, "location is found" requires that the posterior of $N$ has a unique max, ie the public or the spy must have conviction. This is why when the spy speaks first, the public's posterior is basically the claim $C$ itself, so has a 10% chance of being correct (dotted gray line), while the spy posterior is still uniform across all locations, so its success probability is 0.
 
-### $T > 1$ does not help `nonspy` much, but helps `spy`
+### $T > 1$ does not help `nonspy` much, but helps `spy`. $T = 6$ is a "fair" game"
 
 
 ![](./P3L10_nonspy_p_vs_T.png)
 
 For $T = 3$ (everyone spoke once each) and $T = 6$ (everyone spoke twice each), the `nonspy`'s team ability to catch the spy doesn't increase by very much from this one-shot 63% baseline, and the order matters less. This is expected: once the spy's posterior $N$ converges towards the true distribution, their claims look more like a nonspy, so more rounds do not add information. 
 
-Meanwhile, the `spy` keeps on getting better at finding the location the longer the game goes on. At $T = 6$, it has 
+Meanwhile, the `spy` keeps on getting better at finding the location the longer the game goes on. 
 
 ![](./P3L10_spy_p_vs_T.png)
 
@@ -401,17 +405,3 @@ We assume that
 * game ending logic is exactly as written: whenever either the `spy` is confident of the location, or that everyone in the `nonspy` team suspects the same player. 
 
 Results: TODO. 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
