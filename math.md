@@ -117,7 +117,11 @@ Below, we ran simulation with $\theta = 2$. That should give the spy the 30% cha
 
 ---
 
-**Proof of Theorem 1.** GPT-4 can give you a brute-force computation (with error). But let us go for an elegant probabilistic proof. Introduce i.i.d $exponential(1)$ random variables $E_1, \dots, E_{\theta-1}$ and $Y_1, \dots, Y_n$. Our problem is to compute
+**Aside. GPT and proofs**  GPT current best math model (o4) can give you a brute-force computation riddled with **subtle** errors. It couldn't derive the above recursion. LLMs, in my opinion, are mass-copy machines. It's (still) abysmal at coming up with something original. 
+
+I had a lot of fun writing the man-made $\copyright$ proof below. It's not difficult, just an undergrad-level argument, but it is such a treat to discover it, like spotting a beautiful shell on the beach. But the experience is tinged with sadness as well, for the moment the shell is made, it will be fed to the LLM shredder, reassembled and served on demand. The next generations will be denied the opportunity to discover such simple beauty. 
+
+**Proof of Theorem 1.** Introduce i.i.d $exponential(1)$ random variables $E_1, \dots, E_{\theta-1}$ and $Y_1, \dots, Y_n$. Our problem is to compute
 $$ F(\theta,n) = \mathbb{P}(E_1 + \dots E_{\theta-1} + Y_1 > \max_{i=1,\dots,n} Y_i). $$
 Now, take the $Y_1, \dots, Y_n$, and let $O_n < O_{n-1} < \dots < O_1$ be their order statistics, ie $O_n$ = smallest $Y_i$'s, $O_1$ = largest $Y_i$. Then we can write the $O_i$'s as partial sums of the sequence $(Z_n, Z_{n-1}, \dots, Z_1)$ where $Z_i \sim exponential(i)$ and the $Z_i$'s are independent. That is, 
 $$
@@ -145,8 +149,14 @@ $$
 &= F(\theta-1,i).
 \end{align*}
 $$
-Now, $P(Y_1 = O_i) = \frac{1}{n}$. Therefore,
-$$ F(\theta,n) = \frac{1}{n}\sum_{i=1}^nF(\theta-1,i).  $$
+Therefore,
+$$ 
+\begin{align*}
+F(\theta,n) &= \mathbb{P}(E_1 + \dots E_{\theta-1} + Y_1 > O_1 )\\
+ &= \sum_{i=1}^n\mathbb{P}(E_1 + \dots E_{\theta-1} + Y_1 > O_1 | Y_1 = O_i) \mathbb{P}(Y_1 = O_i) \\
+&= \frac{1}{n} \sum_{i=1}^nF(\theta-1,i).
+\end{align*}
+$$
 QED. 
 
 ---
@@ -193,7 +203,7 @@ So for fixed $n$, this is an $O(1)$ amount of information, as opposed to $O(1/s)
 
 ##  Aside: Pinker's lemma
 
-I was looking for a cheap bound on some measure of power or accuracy of our likelihood ratio test and the KL divergence $D(P || Q)$, which is our "expected likelihood ratio". GPT4 helpfully suggested the following lemma that connects (hypothesis test accuracy) to $d_{TV}(P,Q)$: 
+I was looking for a cheap bound on some measure of power or accuracy of our likelihood ratio test and the KL divergence $D(P || Q)$, which is our "expected likelihood ratio". GPT4 helpfully suggested the following lemma that connects (hypothesis test accuracy) to $d_{TV}(P,Q)$. (Sadly this was written by GPT, so I was denied the opportunity to discover this cute result myself).  
 
 **Proposition.**
 In the simple hypothesis‐testing problem
@@ -218,6 +228,7 @@ $\displaystyle\|P-Q\|_{TV}=\sup_{A}\lvert P(A)-Q(A)\rvert =\tfrac12\int|\,p(c)-q
 ---
 
 ### Proof (written by GPT o4-mini-high)
+
 
 1. **Optimal rule.**
    By the Neyman–Pearson / Bayes argument, the optimal classifier is
@@ -326,10 +337,81 @@ The [pyro tutorial](https://pyro.ai/examples/intro_long.html) does a good job ex
 We use ``TraceEnum_ELBO`` since our latent variables $N, S$ are discrete and can be exhaustively enumerated. For our discrete latent $Z = (N,S)$, the posterior distribution $q(z|x)$ is represented by a point in $\Delta_{n-1} \times \Delta_{s-1}$. Reparametrize via the `logit` map, this means points $q(z|x)$ is represented by points $\mathbb{R}^{n+s-2}. The  evidence lower bound (ELBO) is exactly
 $$ \mathbb{E}_{q(z|x)} (\log(\frac{p(x,z)}{q(z|x)})) = \sum_z q(z|x)\log(p(x,z) - \log(q(z|x))). $$
 
-So `pyro` enumerates all possiblities of $z$ in parallel and finds $q(z|x)$ (ie the distributions of $N$ and $S$) by optimizing the ELBO over $\mathbb{R}^{n+s-2}$, which can be solved exactly in one step. For our game, this means `pyro` keep track of $ns$ many cases of "site is $i$, spy is $j$", and for each case, compute its likelihood given the data. 
+So `pyro` enumerates all possiblities of $z$ in parallel and finds $q(z|x)$ (ie the distributions of $N$ and $S$) by finding the ELBO over $\mathbb{R}^{n+s-2}$, which can be solved exactly in one step. For our game, this means `pyro` keep track of $ns$ many cases of "site is $i$, spy is $j$", and for each case, compute its likelihood given the data. 
 
 ### Effect of the strategy parameters 
-One nice thing about ``pyro`` is that we can use SVI to learn the hyper parmeters like $\theta$ with constraints just by declaring them as ``pyro.param``. See the **findings** section below. 
+One nice thing about ``pyro`` is that we can use SVI to learn the hyper parmeters like $\theta$ with constraints just by declaring them as ``pyro.param``. I will do more extensive experiment in later ireations. Just note that the pyro ``param_store`` is global and should be reset between runs if we don't want the previous param to carry over.  
 
 # Findings
+
+We run experiments with 3 players and 10 locations. 3 players should be the most "fair" game, with least built-in advantage for the spy. 
+
+### One game demo: The spy and non-spy are more "confident" than the public
+
+This is natural, for they have exact private information so they only need to marginalize either $N$ or $S$, while the public needs to marginalize both. 
+
+Here $T = 3$, $S = 1$ (spy spoke second), $N = 6$. In this case, the `nonspy` caught the spy, the `spy` cannot find the location, while the public is clueless. 
+
+![](./S1T3_qS.png)
+![](./S1T3_qN.png)
+
+### Claim distribution explains beliefs
+
+The claim distributions explains what "sways" the spy and the public
+* the public was swayed by the spy claim because they appear very confident
+* the first speaker (nonspy) basically told a lie: said that 4,7 are most likely
+* the last speaker (nonspy) said that 6,7 are most likely. While 6 is correct, 7 also appears with "high probability". This tricked the spy into strongly believing that 7 is correct. 
+
+![](./S1T3_claims.png)
+
+---
+
+Below are "mass repeats" results. Unlike the one-run example above, I didn't bother with reusing samples since the runtime is small, so each setting is ran $1000 \times 3$ times, each 1000 batch supplies data to run inference from the viewpoint of one of three mode: `spy` ($S$ known), `nonspy` ($N$ known), or public (neither known).
+
+
+### $T = 1$ math is verified
+
+As expected, the spy's chance of finding the location is about 30% after seeing one non-spy sample (solid gray line).
+
+![](./P3L10_spy_p_vs_start.png)
+
+and the non-spy has a 63% chance (gray) of one-shot finding the spy. 
+
+![](./P3L10_nonspy_T1.png)
+
+Our code defines that "spy is found" if the posterior distribution of $S$ has a unique max. That is, there is no "coin-toss", the `nonspy` or the `public` must be accusing one person with conviction that they are the spy. So if the spy is not the speaker, the probability of finding the spy is 0, since the posterior max is equally split between the two non-speakers. Similarly, "location is found" requires that the posterior of $N$ has a unique max, ie the public or the spy must have conviction. This is why when the spy speaks first, the public's posterior is basically the claim $C$ itself, so has a 10% chance of being correct (dotted gray line), while the spy posterior is still uniform across all locations, so its success probability is 0.
+
+### $T > 1$ does not help `nonspy` much, but helps `spy`
+
+
+![](./P3L10_nonspy_p_vs_T.png)
+
+For $T = 3$ (everyone spoke once each) and $T = 6$ (everyone spoke twice each), the `nonspy`'s team ability to catch the spy doesn't increase by very much from this one-shot 63% baseline, and the order matters less. This is expected: once the spy's posterior $N$ converges towards the true distribution, their claims look more like a nonspy, so more rounds do not add information. 
+
+Meanwhile, the `spy` keeps on getting better at finding the location the longer the game goes on. At $T = 6$, it has 
+
+![](./P3L10_spy_p_vs_T.png)
+
+From these graphs, $T = 6$ is an interesting inflection point: both spy and nonspy have a marginal probability of about 60% of winning. The non-spy team has a slight advantage, though `loc_found` and `spy_found` should be negatively correlated: spy is easier to find if they're struggling to find the location, so without tie-breaking, it's a bit unclear which team should win. To find out, we should just run the actual game. 
+
+# Actual games
+
+We assume that
+* $\theta = 2$: fixed and known. 
+* game ending logic is exactly as written: whenever either the `spy` is confident of the location, or that everyone in the `nonspy` team suspects the same player. 
+
+Results: TODO. 
+
+
+
+
+
+
+
+
+
+
+
+
+
 
